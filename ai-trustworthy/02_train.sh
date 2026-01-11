@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# Qwen3-14B Training Script
-# Fine-tuning with Reasoning + Conversational datasets
+# AI Trustworthiness Training Script
+# Fine-tuning with Korean LLM Trustworthiness Benchmark Dataset
 # ==============================================================================
 
 set -e
@@ -24,7 +24,6 @@ VENV_DIR=".venv"
 # ==============================================================================
 load_env() {
     if [ -f "env_local" ]; then
-        # Export all variables from env_local
         set -a
         source env_local
         set +a
@@ -41,12 +40,13 @@ load_env
 # ==============================================================================
 # Default values (from env_local or fallback)
 # ==============================================================================
-GPU_IDS="${TRAIN_GPU_IDS:-0,1}"
-BATCH_SIZE="${TRAIN_BATCH_SIZE:-2}"
+GPU_IDS="${TRAIN_GPU_IDS:-0}"
+BATCH_SIZE="${TRAIN_BATCH_SIZE:-4}"
 LEARNING_RATE="${TRAIN_LEARNING_RATE:-2e-4}"
-MAX_STEPS="${TRAIN_MAX_STEPS:-30}"
-EPOCHS="${TRAIN_EPOCHS:-}"
-LORA_RANK="${LORA_R:-32}"
+MAX_STEPS="${TRAIN_MAX_STEPS:-}"
+EPOCHS="${TRAIN_EPOCHS:-1}"
+LORA_RANK="${LORA_R:-64}"
+DATASET_SUBSET="${DATASET_SUBSET:-sft_instruction}"
 SKIP_VENV=""
 
 # ==============================================================================
@@ -56,7 +56,8 @@ SKIP_VENV=""
 print_banner() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║          Qwen3-14B Reasoning + Conversational Training       ║"
+    echo "║      AI Trustworthiness Training                             ║"
+    echo "║      Korean LLM Trustworthiness Benchmark                    ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -65,28 +66,33 @@ print_help() {
     echo -e "${GREEN}Usage:${NC} $0 [OPTIONS]"
     echo ""
     echo -e "${GREEN}Options:${NC}"
-    echo "  -g, --gpu IDS       GPU device IDs (default: $GPU_IDS from env_local)"
+    echo "  -g, --gpu IDS       GPU device IDs (default: $GPU_IDS)"
     echo "  -b, --batch N       Batch size (default: $BATCH_SIZE)"
     echo "  -r, --lr RATE       Learning rate (default: $LEARNING_RATE)"
-    echo "  -s, --steps N       Max training steps (default: $MAX_STEPS)"
-    echo "  -e, --epochs N      Number of epochs (if set, max_steps is ignored)"
+    echo "  -s, --steps N       Max training steps"
+    echo "  -e, --epochs N      Number of epochs (default: $EPOCHS)"
     echo "  --lora-r N          LoRA rank (default: $LORA_RANK)"
+    echo "  -d, --dataset NAME  Dataset subset: sft_instruction, fact_checking"
     echo "  --no-venv           Skip virtual environment activation"
     echo "  -l, --logs          List recent training logs"
     echo "  -c, --clean         Clean old log directories (keep last 5)"
-    echo "  -v, --vars          Show current configuration from env_local"
+    echo "  -v, --vars          Show current configuration"
     echo "  -h, --help          Show this help message"
+    echo ""
+    echo -e "${GREEN}Dataset Subsets:${NC}"
+    echo "  sft_instruction     SFT 지시학습 (Helpfulness, Harmlessness, Honesty)"
+    echo "  fact_checking       팩트체킹 (정답/오답 판별)"
+    echo "  dpo_preference      선호도 학습 (chosen 응답으로 SFT 학습)"
     echo ""
     echo -e "${GREEN}Examples:${NC}"
     echo "  $0                  # Train with env_local settings"
-    echo "  $0 -g 0             # Train on GPU 0 only"
-    echo "  $0 -g 2,3 -b 4      # Train on GPU 2,3 with batch size 4"
+    echo "  $0 -g 0             # Train on GPU 0"
+    echo "  $0 -d fact_checking # Train on fact checking dataset"
     echo "  $0 -s 100 -r 1e-4   # Train 100 steps with lr=1e-4"
     echo "  $0 -e 3             # Train for 3 full epochs"
-    echo "  $0 -v               # Show current configuration"
     echo ""
     echo -e "${GREEN}Setup:${NC}"
-    echo "  Run ${YELLOW}./01_setup.sh${NC} first to create uv virtual environment"
+    echo "  Run ${YELLOW}./01_setup.sh${NC} first to create virtual environment"
     echo ""
 }
 
@@ -100,6 +106,10 @@ show_vars() {
     echo "  MAX_SEQ_LENGTH:   ${MAX_SEQ_LENGTH:-not set}"
     echo "  LOAD_IN_4BIT:     ${LOAD_IN_4BIT:-not set}"
     echo ""
+    echo -e "${GREEN}[Dataset]${NC}"
+    echo "  DATASET_NAME:     ${DATASET_NAME:-not set}"
+    echo "  DATASET_SUBSET:   ${DATASET_SUBSET:-not set}"
+    echo ""
     echo -e "${GREEN}[LoRA]${NC}"
     echo "  LORA_R:           ${LORA_R:-not set}"
     echo "  LORA_ALPHA:       ${LORA_ALPHA:-not set}"
@@ -110,19 +120,14 @@ show_vars() {
     echo "  TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE:-not set}"
     echo "  TRAIN_LEARNING_RATE: ${TRAIN_LEARNING_RATE:-not set}"
     echo "  TRAIN_MAX_STEPS:  ${TRAIN_MAX_STEPS:-not set}"
-    echo "  TRAIN_CHAT_PERCENTAGE: ${TRAIN_CHAT_PERCENTAGE:-not set}"
+    echo "  TRAIN_EPOCHS:     ${TRAIN_EPOCHS:-not set}"
     echo "  TRAIN_EVAL_RATIO: ${TRAIN_EVAL_RATIO:-not set}"
     echo ""
-    echo -e "${GREEN}[Inference - Normal]${NC}"
+    echo -e "${GREEN}[Inference]${NC}"
     echo "  INFER_TEMPERATURE: ${INFER_TEMPERATURE:-not set}"
     echo "  INFER_TOP_P:      ${INFER_TOP_P:-not set}"
     echo "  INFER_TOP_K:      ${INFER_TOP_K:-not set}"
     echo "  INFER_MAX_TOKENS: ${INFER_MAX_TOKENS:-not set}"
-    echo ""
-    echo -e "${GREEN}[Inference - Thinking]${NC}"
-    echo "  INFER_THINKING_TEMPERATURE: ${INFER_THINKING_TEMPERATURE:-not set}"
-    echo "  INFER_THINKING_TOP_P: ${INFER_THINKING_TOP_P:-not set}"
-    echo "  INFER_THINKING_MAX_TOKENS: ${INFER_THINKING_MAX_TOKENS:-not set}"
     echo ""
     echo -e "${GREEN}[API Keys]${NC}"
     echo "  HF_TOKEN:         $([ -n "$HF_TOKEN" ] && echo "✓ set" || echo "✗ not set")"
@@ -180,7 +185,7 @@ activate_venv() {
         return 0
     fi
     
-    echo -e "${BLUE}🐍 Activating uv virtual environment...${NC}"
+    echo -e "${BLUE}🐍 Activating virtual environment...${NC}"
     
     if [ ! -d "$VENV_DIR" ]; then
         echo -e "  ${RED}✗${NC} Virtual environment not found at $VENV_DIR"
@@ -216,24 +221,7 @@ check_env() {
     # Check required packages
     python -c "import unsloth" 2>/dev/null && echo -e "  ${GREEN}✓${NC} unsloth" || { echo -e "  ${RED}✗${NC} unsloth not installed"; exit 1; }
     python -c "import torch" 2>/dev/null && echo -e "  ${GREEN}✓${NC} torch" || { echo -e "  ${RED}✗${NC} torch not installed"; exit 1; }
-    
-    # Check and auto-install wandb if needed
-    if python -c "import wandb" 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} wandb"
-    else
-        echo -e "  ${YELLOW}!${NC} wandb not installed, installing with uv..."
-        if command -v uv &> /dev/null; then
-            uv pip install wandb -q
-        else
-            pip install wandb -q
-        fi
-        if python -c "import wandb" 2>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} wandb installed successfully"
-        else
-            echo -e "  ${RED}✗${NC} wandb installation failed"
-            exit 1
-        fi
-    fi
+    python -c "import datasets" 2>/dev/null && echo -e "  ${GREEN}✓${NC} datasets" || { echo -e "  ${RED}✗${NC} datasets not installed"; exit 1; }
     
     # Check env_local
     if [ -f "env_local" ]; then
@@ -250,31 +238,32 @@ run_training() {
     echo ""
     echo -e "${GREEN}[Training Parameters]${NC}"
     echo "  GPU IDs:       $GPU_IDS"
+    echo "  Dataset:       $DATASET_SUBSET"
     echo "  Batch size:    $BATCH_SIZE"
     echo "  Learning rate: $LEARNING_RATE"
     
-    # Handle epochs vs max_steps
-    if [ -n "$EPOCHS" ]; then
-        echo "  Epochs:        $EPOCHS (max_steps disabled)"
-        export TRAIN_EPOCHS="$EPOCHS"
-        export TRAIN_MAX_STEPS=""
-    else
+    if [ -n "$MAX_STEPS" ]; then
         echo "  Max steps:     $MAX_STEPS"
         export TRAIN_MAX_STEPS="$MAX_STEPS"
         export TRAIN_EPOCHS=""
+    else
+        echo "  Epochs:        $EPOCHS"
+        export TRAIN_EPOCHS="$EPOCHS"
+        export TRAIN_MAX_STEPS=""
     fi
     
     echo "  LoRA rank:     $LORA_RANK"
     echo ""
     
-    # Export overrides as environment variables
+    # Export overrides
     export CUDA_VISIBLE_DEVICES="$GPU_IDS"
     export TRAIN_BATCH_SIZE="$BATCH_SIZE"
     export TRAIN_LEARNING_RATE="$LEARNING_RATE"
     export LORA_R="$LORA_RANK"
+    export DATASET_SUBSET="$DATASET_SUBSET"
     
     # Run training
-    python qwen3_\(14b\)_reasoning_conversational.py
+    python train_trustworthy.py
     
     echo ""
     echo -e "${GREEN}✅ Training completed!${NC}"
@@ -328,6 +317,10 @@ while [[ $# -gt 0 ]]; do
             LORA_RANK="$2"
             shift 2
             ;;
+        -d|--dataset)
+            DATASET_SUBSET="$2"
+            shift 2
+            ;;
         --no-venv)
             SKIP_VENV="1"
             shift
@@ -375,3 +368,4 @@ read
 
 # Run training
 run_training
+

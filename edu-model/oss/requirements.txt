@@ -1,11 +1,12 @@
 # ==============================================================================
-# Qwen3-14B Training Requirements
+# GPT-OSS 20B Training Requirements
 # Install with: uv pip install -r requirements.txt
 # ==============================================================================
 
 # Core ML frameworks
-torch>=2.0.0
-transformers>=4.40.0
+torch>=2.8.0
+triton>=3.4.0
+transformers>=4.56.0
 datasets>=2.0.0
 accelerate>=0.20.0
 
@@ -13,7 +14,7 @@ accelerate>=0.20.0
 unsloth
 
 # Training utilities
-trl>=0.7.0
+trl>=0.22.0
 peft>=0.10.0
 bitsandbytes>=0.41.0
 

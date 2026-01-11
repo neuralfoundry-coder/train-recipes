@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# Qwen3-14B Training Script
-# Fine-tuning with Reasoning + Conversational datasets
+# GPT-OSS 20B Korean Education Training Script
+# Fine-tuning with Korean education instruction dataset
 # ==============================================================================
 
 set -e
@@ -41,13 +41,15 @@ load_env
 # ==============================================================================
 # Default values (from env_local or fallback)
 # ==============================================================================
-GPU_IDS="${TRAIN_GPU_IDS:-0,1}"
-BATCH_SIZE="${TRAIN_BATCH_SIZE:-2}"
+GPU_IDS="${TRAIN_GPU_IDS:-1}"
+BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
 LEARNING_RATE="${TRAIN_LEARNING_RATE:-2e-4}"
-MAX_STEPS="${TRAIN_MAX_STEPS:-30}"
-EPOCHS="${TRAIN_EPOCHS:-}"
-LORA_RANK="${LORA_R:-32}"
+MAX_STEPS="${TRAIN_MAX_STEPS:-100}"
+EPOCHS="${TRAIN_EPOCHS:-1}"
+LORA_RANK="${LORA_R:-16}"
+REASONING_EFFORT="${INFER_REASONING_EFFORT:-medium}"
 SKIP_VENV=""
+AUTO_YES=""
 
 # ==============================================================================
 # Functions
@@ -56,7 +58,7 @@ SKIP_VENV=""
 print_banner() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║          Qwen3-14B Reasoning + Conversational Training       ║"
+    echo "║      GPT-OSS 20B Korean Education Fine-tuning Training       ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -71,6 +73,7 @@ print_help() {
     echo "  -s, --steps N       Max training steps (default: $MAX_STEPS)"
     echo "  -e, --epochs N      Number of epochs (if set, max_steps is ignored)"
     echo "  --lora-r N          LoRA rank (default: $LORA_RANK)"
+    echo "  --reasoning LEVEL   Reasoning effort: low, medium, high (default: $REASONING_EFFORT)"
     echo "  --no-venv           Skip virtual environment activation"
     echo "  -l, --logs          List recent training logs"
     echo "  -c, --clean         Clean old log directories (keep last 5)"
@@ -79,11 +82,14 @@ print_help() {
     echo ""
     echo -e "${GREEN}Examples:${NC}"
     echo "  $0                  # Train with env_local settings"
-    echo "  $0 -g 0             # Train on GPU 0 only"
-    echo "  $0 -g 2,3 -b 4      # Train on GPU 2,3 with batch size 4"
-    echo "  $0 -s 100 -r 1e-4   # Train 100 steps with lr=1e-4"
+    echo "  $0 -g 1             # Train on GPU 1 only"
+    echo "  $0 -s 200 -r 1e-4   # Train 200 steps with lr=1e-4"
     echo "  $0 -e 3             # Train for 3 full epochs"
+    echo "  $0 --reasoning high # Use high reasoning effort"
     echo "  $0 -v               # Show current configuration"
+    echo ""
+    echo -e "${GREEN}Dataset:${NC}"
+    echo "  neuralfoundry-coder/aihub-korean-education-instruct"
     echo ""
     echo -e "${GREEN}Setup:${NC}"
     echo "  Run ${YELLOW}./01_setup.sh${NC} first to create uv virtual environment"
@@ -97,6 +103,7 @@ show_vars() {
     echo -e "${GREEN}[Model]${NC}"
     echo "  MODEL_NAME:       ${MODEL_NAME:-not set}"
     echo "  MODEL_SHORT_NAME: ${MODEL_SHORT_NAME:-not set}"
+    echo "  DATASET_NAME:     ${DATASET_NAME:-not set}"
     echo "  MAX_SEQ_LENGTH:   ${MAX_SEQ_LENGTH:-not set}"
     echo "  LOAD_IN_4BIT:     ${LOAD_IN_4BIT:-not set}"
     echo ""
@@ -110,19 +117,16 @@ show_vars() {
     echo "  TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE:-not set}"
     echo "  TRAIN_LEARNING_RATE: ${TRAIN_LEARNING_RATE:-not set}"
     echo "  TRAIN_MAX_STEPS:  ${TRAIN_MAX_STEPS:-not set}"
-    echo "  TRAIN_CHAT_PERCENTAGE: ${TRAIN_CHAT_PERCENTAGE:-not set}"
     echo "  TRAIN_EVAL_RATIO: ${TRAIN_EVAL_RATIO:-not set}"
     echo ""
-    echo -e "${GREEN}[Inference - Normal]${NC}"
+    echo -e "${GREEN}[GPT-OSS Specific]${NC}"
+    echo "  INFER_REASONING_EFFORT: ${INFER_REASONING_EFFORT:-not set}"
+    echo ""
+    echo -e "${GREEN}[Inference]${NC}"
     echo "  INFER_TEMPERATURE: ${INFER_TEMPERATURE:-not set}"
     echo "  INFER_TOP_P:      ${INFER_TOP_P:-not set}"
     echo "  INFER_TOP_K:      ${INFER_TOP_K:-not set}"
     echo "  INFER_MAX_TOKENS: ${INFER_MAX_TOKENS:-not set}"
-    echo ""
-    echo -e "${GREEN}[Inference - Thinking]${NC}"
-    echo "  INFER_THINKING_TEMPERATURE: ${INFER_THINKING_TEMPERATURE:-not set}"
-    echo "  INFER_THINKING_TOP_P: ${INFER_THINKING_TOP_P:-not set}"
-    echo "  INFER_THINKING_MAX_TOKENS: ${INFER_THINKING_MAX_TOKENS:-not set}"
     echo ""
     echo -e "${GREEN}[API Keys]${NC}"
     echo "  HF_TOKEN:         $([ -n "$HF_TOKEN" ] && echo "✓ set" || echo "✗ not set")"
@@ -249,22 +253,23 @@ run_training() {
     echo -e "${BLUE}🚀 Starting training...${NC}"
     echo ""
     echo -e "${GREEN}[Training Parameters]${NC}"
-    echo "  GPU IDs:       $GPU_IDS"
-    echo "  Batch size:    $BATCH_SIZE"
-    echo "  Learning rate: $LEARNING_RATE"
+    echo "  GPU IDs:           $GPU_IDS"
+    echo "  Batch size:        $BATCH_SIZE"
+    echo "  Learning rate:     $LEARNING_RATE"
+    echo "  Reasoning effort:  $REASONING_EFFORT"
     
     # Handle epochs vs max_steps
     if [ -n "$EPOCHS" ]; then
-        echo "  Epochs:        $EPOCHS (max_steps disabled)"
+        echo "  Epochs:            $EPOCHS (max_steps disabled)"
         export TRAIN_EPOCHS="$EPOCHS"
         export TRAIN_MAX_STEPS=""
     else
-        echo "  Max steps:     $MAX_STEPS"
+        echo "  Max steps:         $MAX_STEPS"
         export TRAIN_MAX_STEPS="$MAX_STEPS"
         export TRAIN_EPOCHS=""
     fi
     
-    echo "  LoRA rank:     $LORA_RANK"
+    echo "  LoRA rank:         $LORA_RANK"
     echo ""
     
     # Export overrides as environment variables
@@ -272,9 +277,10 @@ run_training() {
     export TRAIN_BATCH_SIZE="$BATCH_SIZE"
     export TRAIN_LEARNING_RATE="$LEARNING_RATE"
     export LORA_R="$LORA_RANK"
+    export INFER_REASONING_EFFORT="$REASONING_EFFORT"
     
     # Run training
-    python qwen3_\(14b\)_reasoning_conversational.py
+    python "gpt_oss_(20b)_korean_education.py"
     
     echo ""
     echo -e "${GREEN}✅ Training completed!${NC}"
@@ -328,8 +334,16 @@ while [[ $# -gt 0 ]]; do
             LORA_RANK="$2"
             shift 2
             ;;
+        --reasoning)
+            REASONING_EFFORT="$2"
+            shift 2
+            ;;
         --no-venv)
             SKIP_VENV="1"
+            shift
+            ;;
+        -y|--yes)
+            AUTO_YES="1"
             shift
             ;;
         -l|--logs)
@@ -369,9 +383,12 @@ activate_venv
 # Check environment
 check_env
 
-# Confirm before training
-echo -e "${YELLOW}Press Enter to start training, or Ctrl+C to cancel...${NC}"
-read
+# Confirm before training (skip with -y/--yes)
+if [ "$AUTO_YES" != "1" ]; then
+    echo -e "${YELLOW}Press Enter to start training, or Ctrl+C to cancel...${NC}"
+    read
+fi
 
 # Run training
 run_training
+

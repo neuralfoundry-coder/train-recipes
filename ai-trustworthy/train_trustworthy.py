@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Qwen3 14B Reasoning + Conversational Fine-tuning with Unsloth
-- Reasoning dataset: OpenMathReasoning
-- Non-reasoning dataset: FineTome-100k
+AI Trustworthiness Fine-tuning with Unsloth
+Korean LLM Trustworthiness Benchmark Dataset
+- Categories: Helpfulness, Harmlessness, Honesty
+- Training modes: SFT, DPO
 """
 
 import os
@@ -50,7 +51,7 @@ ENV_LOCAL = load_env_local()
 
 # GPU Configuration (must be set before torch import)
 CUDA_VISIBLE_DEVICES = get_env("CUDA_VISIBLE_DEVICES", 
-                                get_env("TRAIN_GPU_IDS", "0,1", ENV_LOCAL), 
+                                get_env("TRAIN_GPU_IDS", "0", ENV_LOCAL), 
                                 ENV_LOCAL)
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
 
@@ -59,8 +60,8 @@ import torch
 import wandb
 import pandas as pd
 from datasets import load_dataset, Dataset
-from unsloth import FastLanguageModel
-from unsloth.chat_templates import standardize_sharegpt
+from unsloth import FastModel
+from unsloth.chat_templates import get_chat_template, train_on_responses_only
 from trl import SFTTrainer, SFTConfig
 from transformers import TextStreamer
 
@@ -74,63 +75,69 @@ HF_TOKEN = get_env("HF_TOKEN", None, ENV_LOCAL)
 WNB_API_KEY = get_env("WNB_API_KEY", None, ENV_LOCAL)
 
 # Model Configuration
-MODEL_NAME = get_env("MODEL_NAME", "unsloth/Qwen3-14B", ENV_LOCAL)
-MODEL_SHORT_NAME = get_env("MODEL_SHORT_NAME", "qwen3-14b", ENV_LOCAL)
-DATASET_NAME = get_env("DATASET_NAME", "reasoning-conversational", ENV_LOCAL)
-MAX_SEQ_LENGTH = get_env("MAX_SEQ_LENGTH", 32768, ENV_LOCAL, int)
+MODEL_NAME = get_env("MODEL_NAME", "unsloth/gemma-3-1b-it", ENV_LOCAL)
+MODEL_SHORT_NAME = get_env("MODEL_SHORT_NAME", "gemma3-1b", ENV_LOCAL)
+CHAT_TEMPLATE = get_env("CHAT_TEMPLATE", "gemma3", ENV_LOCAL)
+MAX_SEQ_LENGTH = get_env("MAX_SEQ_LENGTH", 4096, ENV_LOCAL, int)
 LOAD_IN_4BIT = get_env("LOAD_IN_4BIT", False, ENV_LOCAL, bool)
 LOAD_IN_8BIT = get_env("LOAD_IN_8BIT", False, ENV_LOCAL, bool)
 
+# Dataset Configuration
+DATASET_NAME = get_env("DATASET_NAME", "neuralfoundry-coder/korean-llm-trustworthiness-benchmark-full", ENV_LOCAL)
+DATASET_SUBSET = get_env("DATASET_SUBSET", "sft_instruction", ENV_LOCAL)
+
 # LoRA Configuration
-LORA_R = get_env("LORA_R", 32, ENV_LOCAL, int)
-LORA_ALPHA = get_env("LORA_ALPHA", 32, ENV_LOCAL, int)
+LORA_R = get_env("LORA_R", 64, ENV_LOCAL, int)
+LORA_ALPHA = get_env("LORA_ALPHA", 64, ENV_LOCAL, int)
 LORA_DROPOUT = get_env("LORA_DROPOUT", 0, ENV_LOCAL, int)
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # Training Configuration
-CHAT_PERCENTAGE = get_env("TRAIN_CHAT_PERCENTAGE", 0.25, ENV_LOCAL, float)
 EVAL_RATIO = get_env("TRAIN_EVAL_RATIO", 0.05, ENV_LOCAL, float)
-BATCH_SIZE = get_env("TRAIN_BATCH_SIZE", 2, ENV_LOCAL, int)
+BATCH_SIZE = get_env("TRAIN_BATCH_SIZE", 4, ENV_LOCAL, int)
 GRADIENT_ACCUMULATION_STEPS = get_env("TRAIN_GRADIENT_ACCUMULATION_STEPS", 4, ENV_LOCAL, int)
-WARMUP_STEPS = get_env("TRAIN_WARMUP_STEPS", 5, ENV_LOCAL, int)
+WARMUP_STEPS = get_env("TRAIN_WARMUP_STEPS", 10, ENV_LOCAL, int)
 LEARNING_RATE = get_env("TRAIN_LEARNING_RATE", 2e-4, ENV_LOCAL, float)
 SEED = get_env("TRAIN_SEED", 3407, ENV_LOCAL, int)
 
 # Epochs vs Max Steps (epochs takes priority if set)
 _epochs_str = get_env("TRAIN_EPOCHS", "", ENV_LOCAL)
-_max_steps_str = get_env("TRAIN_MAX_STEPS", "30", ENV_LOCAL)
+_max_steps_str = get_env("TRAIN_MAX_STEPS", "", ENV_LOCAL)
 
 if _epochs_str and _epochs_str.strip():
     NUM_TRAIN_EPOCHS = int(_epochs_str)
-    MAX_STEPS = None  # Disable max_steps when epochs is set
+    MAX_STEPS = None
 else:
     NUM_TRAIN_EPOCHS = 1
-    MAX_STEPS = int(_max_steps_str) if _max_steps_str else 30
+    MAX_STEPS = int(_max_steps_str) if _max_steps_str else None
 
-# Inference Configuration (for test at end of training)
+# Inference Configuration
 INFER_TEMPERATURE = get_env("INFER_TEMPERATURE", 0.7, ENV_LOCAL, float)
-INFER_TOP_P = get_env("INFER_TOP_P", 0.8, ENV_LOCAL, float)
-INFER_TOP_K = get_env("INFER_TOP_K", 20, ENV_LOCAL, int)
+INFER_TOP_P = get_env("INFER_TOP_P", 0.9, ENV_LOCAL, float)
+INFER_TOP_K = get_env("INFER_TOP_K", 50, ENV_LOCAL, int)
 INFER_MAX_TOKENS = get_env("INFER_MAX_TOKENS", 1024, ENV_LOCAL, int)
-INFER_THINKING_TEMPERATURE = get_env("INFER_THINKING_TEMPERATURE", 0.6, ENV_LOCAL, float)
-INFER_THINKING_TOP_P = get_env("INFER_THINKING_TOP_P", 0.95, ENV_LOCAL, float)
-INFER_THINKING_TOP_K = get_env("INFER_THINKING_TOP_K", 20, ENV_LOCAL, int)
-INFER_THINKING_MAX_TOKENS = get_env("INFER_THINKING_MAX_TOKENS", 2048, ENV_LOCAL, int)
 
 # Timestamp for unique run identification
 RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # Output paths
 BASE_DIR = Path(__file__).parent
-LOG_DIR = BASE_DIR / "logs" / f"{MODEL_SHORT_NAME}_{DATASET_NAME}_{RUN_TIMESTAMP}"
+LOG_DIR = BASE_DIR / "logs" / f"{MODEL_SHORT_NAME}_{DATASET_SUBSET}_{RUN_TIMESTAMP}"
 TRAIN_LOG_DIR = LOG_DIR / "train"
 EVAL_LOG_DIR = LOG_DIR / "eval"
 OUTPUT_DIR = LOG_DIR / "checkpoints"
 LORA_OUTPUT_PATH = LOG_DIR / "lora_model"
 
 # Wandb Configuration
-WANDB_PROJECT = get_env("WANDB_PROJECT", "qwen3-14b-reasoning-conversational", ENV_LOCAL)
-WANDB_RUN_NAME = f"{MODEL_SHORT_NAME}-r{LORA_R}-lr{LEARNING_RATE}-{RUN_TIMESTAMP}"
+WANDB_PROJECT = get_env("WANDB_PROJECT", "ai-trustworthiness-benchmark", ENV_LOCAL)
+WANDB_RUN_NAME = f"{MODEL_SHORT_NAME}-{DATASET_SUBSET}-r{LORA_R}-{RUN_TIMESTAMP}"
+
+# System prompts by category
+SYSTEM_PROMPTS = {
+    "helpfulness": "당신은 사용자의 질문에 도움이 되는 답변을 제공하는 AI 어시스턴트입니다. 질문이 불명확하거나 정보가 부족할 경우 적절한 추가 질문을 통해 사용자의 의도를 파악해야 합니다.",
+    "harmlessness": "당신은 편견 없이 공정하고 해롭지 않은 답변을 제공하는 AI 어시스턴트입니다. 혐오, 편견, 불법적인 내용을 피하고 윤리적으로 올바른 응답을 해야 합니다.",
+    "honesty": "당신은 정확하고 신뢰할 수 있는 정보를 제공하는 AI 어시스턴트입니다. 확실하지 않은 정보는 그렇다고 밝히고, 잘못된 정보를 제공하지 않도록 주의해야 합니다.",
+}
 
 
 # ==============================================================================
@@ -170,11 +177,147 @@ logger = setup_logging()
 
 
 # ==============================================================================
+# Data Preparation
+# ==============================================================================
+def prepare_sft_dataset(tokenizer):
+    """Prepare SFT instruction dataset."""
+    logger.info(f"Loading dataset: {DATASET_NAME} (type={DATASET_SUBSET})")
+    
+    # Load train split and filter by type
+    full_dataset = load_dataset(DATASET_NAME, split="train", token=HF_TOKEN)
+    dataset = full_dataset.filter(lambda x: x["type"] == DATASET_SUBSET)
+    logger.info(f"Loaded {len(dataset)} samples (filtered from {len(full_dataset)} total)")
+    
+    def convert_to_conversation(example):
+        """Convert SFT format to conversation format."""
+        category = example.get("category", "")
+        system_prompt = SYSTEM_PROMPTS.get(category, SYSTEM_PROMPTS["honesty"])
+        
+        conversations = [
+            {"role": "user", "content": example["instruction"]},
+            {"role": "assistant", "content": example["output"]}
+        ]
+        
+        # Add system prompt if supported
+        if example.get("system"):
+            conversations.insert(0, {"role": "system", "content": example["system"]})
+        
+        return {"conversations": conversations}
+    
+    dataset = dataset.map(convert_to_conversation)
+    
+    # Apply chat template
+    def formatting_prompts_func(examples):
+        convos = examples["conversations"]
+        texts = []
+        for convo in convos:
+            text = tokenizer.apply_chat_template(
+                convo, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+            # Remove BOS if present (Gemma3 specific)
+            if text.startswith('<bos>'):
+                text = text.removeprefix('<bos>')
+            texts.append(text)
+        return {"text": texts}
+    
+    dataset = dataset.map(formatting_prompts_func, batched=True)
+    
+    return dataset
+
+
+def prepare_fact_checking_dataset(tokenizer):
+    """Prepare fact checking dataset."""
+    logger.info(f"Loading dataset: {DATASET_NAME} (type=fact_checking)")
+    
+    # Load train split and filter by type
+    full_dataset = load_dataset(DATASET_NAME, split="train", token=HF_TOKEN)
+    dataset = full_dataset.filter(lambda x: x["type"] == "fact_checking")
+    logger.info(f"Loaded {len(dataset)} samples (filtered from {len(full_dataset)} total)")
+    
+    def convert_to_conversation(example):
+        """Convert fact checking format to conversation format."""
+        conversations = [
+            {"role": "user", "content": example["instruction"]},
+            {"role": "assistant", "content": example["output"]}
+        ]
+        return {"conversations": conversations}
+    
+    dataset = dataset.map(convert_to_conversation)
+    
+    def formatting_prompts_func(examples):
+        convos = examples["conversations"]
+        texts = []
+        for convo in convos:
+            text = tokenizer.apply_chat_template(
+                convo, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+            if text.startswith('<bos>'):
+                text = text.removeprefix('<bos>')
+            texts.append(text)
+        return {"text": texts}
+    
+    dataset = dataset.map(formatting_prompts_func, batched=True)
+    
+    return dataset
+
+
+def prepare_dpo_dataset(tokenizer):
+    """Prepare DPO preference dataset for SFT training (using chosen responses)."""
+    logger.info(f"Loading dataset: {DATASET_NAME} (type=dpo_preference)")
+    
+    # Load train split and filter by type
+    full_dataset = load_dataset(DATASET_NAME, split="train", token=HF_TOKEN)
+    dataset = full_dataset.filter(lambda x: x["type"] == "dpo_preference")
+    logger.info(f"Loaded {len(dataset)} samples (filtered from {len(full_dataset)} total)")
+    
+    def convert_to_conversation(example):
+        """Convert DPO format to conversation format (using chosen response)."""
+        category = example.get("category", "")
+        system_prompt = SYSTEM_PROMPTS.get(category, SYSTEM_PROMPTS["honesty"])
+        
+        conversations = [
+            {"role": "user", "content": example["prompt"]},
+            {"role": "assistant", "content": example["chosen"]}
+        ]
+        
+        # Add system prompt if provided
+        if example.get("system"):
+            conversations.insert(0, {"role": "system", "content": example["system"]})
+        
+        return {"conversations": conversations}
+    
+    dataset = dataset.map(convert_to_conversation)
+    
+    def formatting_prompts_func(examples):
+        convos = examples["conversations"]
+        texts = []
+        for convo in convos:
+            text = tokenizer.apply_chat_template(
+                convo, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+            if text.startswith('<bos>'):
+                text = text.removeprefix('<bos>')
+            texts.append(text)
+        return {"text": texts}
+    
+    dataset = dataset.map(formatting_prompts_func, batched=True)
+    
+    return dataset
+
+
+# ==============================================================================
 # Training Pipeline
 # ==============================================================================
 def main():
     logger.info("=" * 70)
-    logger.info("QWEN3-14B REASONING + CONVERSATIONAL FINE-TUNING")
+    logger.info("AI TRUSTWORTHINESS FINE-TUNING")
+    logger.info("Korean LLM Trustworthiness Benchmark")
     logger.info("=" * 70)
     
     # Log configuration
@@ -185,10 +328,11 @@ def main():
     logger.info(f"  Checkpoints: {OUTPUT_DIR}")
     logger.info(f"  LoRA output: {LORA_OUTPUT_PATH}")
     
-    # Log training configuration (from env_local)
+    # Log training configuration
     logger.info("-" * 70)
     logger.info("Configuration (from env_local):")
     logger.info(f"  Model: {MODEL_NAME}")
+    logger.info(f"  Dataset: {DATASET_NAME}/{DATASET_SUBSET}")
     logger.info(f"  Max sequence length: {MAX_SEQ_LENGTH}")
     logger.info(f"  Load in 4bit: {LOAD_IN_4BIT}")
     logger.info(f"  Load in 8bit: {LOAD_IN_8BIT}")
@@ -199,7 +343,6 @@ def main():
         logger.info(f"  Max steps: {MAX_STEPS}")
     else:
         logger.info(f"  Epochs: {NUM_TRAIN_EPOCHS}")
-    logger.info(f"  Chat percentage: {CHAT_PERCENTAGE:.0%}")
     logger.info(f"  Eval ratio: {EVAL_RATIO:.0%}")
     logger.info(f"  GPU: {CUDA_VISIBLE_DEVICES}")
     logger.info("-" * 70)
@@ -207,6 +350,8 @@ def main():
     # Save config to file
     with open(TRAIN_LOG_DIR / "config.txt", "w") as f:
         f.write(f"MODEL_NAME={MODEL_NAME}\n")
+        f.write(f"DATASET_NAME={DATASET_NAME}\n")
+        f.write(f"DATASET_SUBSET={DATASET_SUBSET}\n")
         f.write(f"MAX_SEQ_LENGTH={MAX_SEQ_LENGTH}\n")
         f.write(f"LOAD_IN_4BIT={LOAD_IN_4BIT}\n")
         f.write(f"LOAD_IN_8BIT={LOAD_IN_8BIT}\n")
@@ -217,7 +362,6 @@ def main():
         f.write(f"LEARNING_RATE={LEARNING_RATE}\n")
         f.write(f"MAX_STEPS={MAX_STEPS}\n")
         f.write(f"NUM_TRAIN_EPOCHS={NUM_TRAIN_EPOCHS}\n")
-        f.write(f"CHAT_PERCENTAGE={CHAT_PERCENTAGE}\n")
         f.write(f"EVAL_RATIO={EVAL_RATIO}\n")
         f.write(f"CUDA_VISIBLE_DEVICES={CUDA_VISIBLE_DEVICES}\n")
     
@@ -233,6 +377,7 @@ def main():
             name=WANDB_RUN_NAME,
             config={
                 "model_name": MODEL_NAME,
+                "dataset": f"{DATASET_NAME}/{DATASET_SUBSET}",
                 "max_seq_length": MAX_SEQ_LENGTH,
                 "load_in_4bit": LOAD_IN_4BIT,
                 "lora_r": LORA_R,
@@ -240,7 +385,6 @@ def main():
                 "batch_size": BATCH_SIZE,
                 "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
                 "learning_rate": LEARNING_RATE,
-                "chat_percentage": CHAT_PERCENTAGE,
                 "eval_ratio": EVAL_RATIO,
             },
         )
@@ -254,7 +398,7 @@ def main():
     logger.info("[STEP 3/8] Loading Model")
     logger.info(f"  Loading {MODEL_NAME}...")
     
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    model, tokenizer = FastModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=LOAD_IN_4BIT,
@@ -266,7 +410,7 @@ def main():
     
     # Add LoRA adapters
     logger.info("  Adding LoRA adapters...")
-    model = FastLanguageModel.get_peft_model(
+    model = FastModel.get_peft_model(
         model,
         r=LORA_R,
         target_modules=TARGET_MODULES,
@@ -280,77 +424,42 @@ def main():
     )
     logger.info("  LoRA adapters added successfully")
     
+    # Apply chat template
+    logger.info(f"  Applying chat template: {CHAT_TEMPLATE}")
+    tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATE)
+    
     # ========================================================================
     # Prepare Dataset
     # ========================================================================
-    logger.info("[STEP 4/8] Preparing Datasets")
+    logger.info("[STEP 4/8] Preparing Dataset")
     
-    logger.info("  Loading reasoning dataset (OpenMathReasoning-mini)...")
-    reasoning_dataset = load_dataset("unsloth/OpenMathReasoning-mini", split="cot")
+    if DATASET_SUBSET == "fact_checking":
+        dataset = prepare_fact_checking_dataset(tokenizer)
+    elif DATASET_SUBSET == "dpo_preference":
+        dataset = prepare_dpo_dataset(tokenizer)
+    else:  # sft_instruction or default
+        dataset = prepare_sft_dataset(tokenizer)
     
-    logger.info("  Loading non-reasoning dataset (FineTome-100k)...")
-    non_reasoning_dataset = load_dataset("mlabonne/FineTome-100k", split="train")
+    # Shuffle and split
+    dataset = dataset.shuffle(seed=SEED)
     
-    def generate_conversation(examples):
-        """Convert reasoning dataset to conversational format."""
-        problems = examples["problem"]
-        solutions = examples["generated_solution"]
-        conversations = []
-        for problem, solution in zip(problems, solutions):
-            conversations.append([
-                {"role": "user", "content": problem},
-                {"role": "assistant", "content": solution},
-            ])
-        return {"conversations": conversations}
-    
-    logger.info("  Processing reasoning dataset...")
-    reasoning_conversations = tokenizer.apply_chat_template(
-        list(reasoning_dataset.map(generate_conversation, batched=True)["conversations"]),
-        tokenize=False,
-    )
-    
-    logger.info("  Processing non-reasoning dataset...")
-    dataset = standardize_sharegpt(non_reasoning_dataset)
-    non_reasoning_conversations = tokenizer.apply_chat_template(
-        list(dataset["conversations"]),
-        tokenize=False,
-    )
-    
-    logger.info(f"  Reasoning samples: {len(reasoning_conversations)}")
-    logger.info(f"  Non-reasoning samples: {len(non_reasoning_conversations)}")
-    
-    # Sample and combine datasets
-    non_reasoning_subset = pd.Series(non_reasoning_conversations).sample(
-        int(len(reasoning_conversations) * (CHAT_PERCENTAGE / (1 - CHAT_PERCENTAGE))),
-        random_state=2407,
-    )
-    
-    logger.info(f"  Sampled non-reasoning: {len(non_reasoning_subset)}")
-    logger.info(f"  Chat ratio: {len(non_reasoning_subset) / (len(non_reasoning_subset) + len(reasoning_conversations)):.2%}")
-    
-    # Combine datasets
-    data = pd.concat([
-        pd.Series(reasoning_conversations),
-        pd.Series(non_reasoning_subset)
-    ])
-    data.name = "text"
-    
-    combined_dataset = Dataset.from_pandas(pd.DataFrame(data))
-    combined_dataset = combined_dataset.shuffle(seed=SEED)
-    
-    # Split into train/eval based on EVAL_RATIO
-    eval_size = max(1, int(len(combined_dataset) * EVAL_RATIO))
-    eval_dataset = combined_dataset.select(range(eval_size))
-    train_dataset = combined_dataset.select(range(eval_size, len(combined_dataset)))
+    eval_size = max(1, int(len(dataset) * EVAL_RATIO))
+    eval_dataset = dataset.select(range(eval_size))
+    train_dataset = dataset.select(range(eval_size, len(dataset)))
     
     logger.info(f"  Train dataset: {len(train_dataset)} samples")
     logger.info(f"  Eval dataset: {len(eval_dataset)} samples ({EVAL_RATIO:.0%})")
     
-    # Save dataset info to eval directory
+    # Show sample
+    logger.info("  Sample data:")
+    sample = train_dataset[0]["text"][:500]
+    logger.info(f"    {sample}...")
+    
+    # Save dataset info
     with open(EVAL_LOG_DIR / "dataset_info.txt", "w") as f:
+        f.write(f"Dataset: {DATASET_NAME}/{DATASET_SUBSET}\n")
         f.write(f"Train samples: {len(train_dataset)}\n")
         f.write(f"Eval samples: {len(eval_dataset)}\n")
-        f.write(f"Chat ratio: {CHAT_PERCENTAGE:.0%}\n")
         f.write(f"Eval ratio: {EVAL_RATIO:.0%}\n")
     
     # ========================================================================
@@ -358,7 +467,6 @@ def main():
     # ========================================================================
     logger.info("[STEP 5/8] Setting up Trainer")
     
-    # Configure training args based on epochs vs max_steps
     sft_config_args = {
         "output_dir": str(OUTPUT_DIR),
         "dataset_text_field": "text",
@@ -377,14 +485,12 @@ def main():
     }
     
     if MAX_STEPS:
-        # Use max_steps mode
         sft_config_args["max_steps"] = MAX_STEPS
         sft_config_args["eval_strategy"] = "steps"
-        sft_config_args["eval_steps"] = 10
+        sft_config_args["eval_steps"] = max(10, MAX_STEPS // 10)
         sft_config_args["save_strategy"] = "steps"
-        sft_config_args["save_steps"] = 10
+        sft_config_args["save_steps"] = max(10, MAX_STEPS // 5)
     else:
-        # Use epochs mode
         sft_config_args["num_train_epochs"] = NUM_TRAIN_EPOCHS
         sft_config_args["eval_strategy"] = "epoch"
         sft_config_args["save_strategy"] = "epoch"
@@ -396,6 +502,16 @@ def main():
         eval_dataset=eval_dataset,
         args=SFTConfig(**sft_config_args),
     )
+    
+    # Train on responses only
+    logger.info("  Setting up train_on_responses_only...")
+    if CHAT_TEMPLATE == "gemma3":
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<start_of_turn>user\n",
+            response_part="<start_of_turn>model\n",
+        )
+    
     logger.info("  Trainer configured successfully")
     
     # ========================================================================
@@ -428,7 +544,7 @@ def main():
     logger.info(f"  Peak memory: {used_memory} GB")
     logger.info(f"  Peak memory for training: {used_memory_for_lora} GB")
     
-    # Save training stats to file
+    # Save training stats
     with open(TRAIN_LOG_DIR / "training_stats.txt", "w") as f:
         f.write(f"Training time: {trainer_stats.metrics['train_runtime']:.2f} seconds\n")
         f.write(f"Peak memory: {used_memory} GB\n")
@@ -446,52 +562,40 @@ def main():
     logger.info(f"  LoRA adapters saved to: {LORA_OUTPUT_PATH}")
     
     # ========================================================================
-    # Inference Example (using config from env_local)
+    # Inference Example
     # ========================================================================
     logger.info("=" * 70)
-    logger.info("INFERENCE EXAMPLES")
+    logger.info("INFERENCE EXAMPLE")
     logger.info("=" * 70)
     
-    # Non-thinking mode
-    logger.info(f"Inference Example (Non-thinking mode)")
-    logger.info(f"  Config: temp={INFER_TEMPERATURE}, top_p={INFER_TOP_P}, top_k={INFER_TOP_K}")
-    messages = [{"role": "user", "content": "Solve (x + 2)^2 = 0."}]
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-    )
+    logger.info(f"Config: temp={INFER_TEMPERATURE}, top_p={INFER_TOP_P}, top_k={INFER_TOP_K}")
     
-    _ = model.generate(
-        **tokenizer(text, return_tensors="pt").to("cuda"),
-        max_new_tokens=INFER_MAX_TOKENS,
-        temperature=INFER_TEMPERATURE,
-        top_p=INFER_TOP_P,
-        top_k=INFER_TOP_K,
-        streamer=TextStreamer(tokenizer, skip_prompt=True),
-    )
+    # Test with a trustworthiness question
+    test_prompts = [
+        "난방비가 적게 나오는 지역의 주민들은 모두 소득 수준이 낮은 것일까요?",
+        "문학에 대해 설명해주세요.",
+    ]
     
-    # Thinking mode
-    logger.info("-" * 70)
-    logger.info(f"Inference Example (Thinking mode)")
-    logger.info(f"  Config: temp={INFER_THINKING_TEMPERATURE}, top_p={INFER_THINKING_TOP_P}, top_k={INFER_THINKING_TOP_K}")
-    messages = [{"role": "user", "content": "Solve (x + 2)^2 = 0."}]
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=True,
-    )
-    
-    _ = model.generate(
-        **tokenizer(text, return_tensors="pt").to("cuda"),
-        max_new_tokens=INFER_THINKING_MAX_TOKENS,
-        temperature=INFER_THINKING_TEMPERATURE,
-        top_p=INFER_THINKING_TOP_P,
-        top_k=INFER_THINKING_TOP_K,
-        streamer=TextStreamer(tokenizer, skip_prompt=True),
-    )
+    for prompt in test_prompts:
+        logger.info(f"\nPrompt: {prompt}")
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        if text.startswith('<bos>'):
+            text = text.removeprefix('<bos>')
+        
+        _ = model.generate(
+            **tokenizer(text, return_tensors="pt").to("cuda"),
+            max_new_tokens=INFER_MAX_TOKENS,
+            temperature=INFER_TEMPERATURE,
+            top_p=INFER_TOP_P,
+            top_k=INFER_TOP_K,
+            streamer=TextStreamer(tokenizer, skip_prompt=True),
+        )
+        logger.info("-" * 40)
     
     # ========================================================================
     # Finish
@@ -507,3 +611,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

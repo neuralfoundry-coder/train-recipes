@@ -1,5 +1,5 @@
 # ==============================================================================
-# Qwen3-14B Training Requirements
+# AI Trustworthiness Training Requirements
 # Install with: uv pip install -r requirements.txt
 # ==============================================================================
 
@@ -22,9 +22,15 @@ wandb
 
 # Utilities
 pandas
+numpy
 sentencepiece
 protobuf
 huggingface_hub>=0.20.0
 hf_transfer
 tqdm
+scikit-learn
+
+# Evaluation
+rouge-score
+nltk
 
