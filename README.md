@@ -32,14 +32,25 @@ train-recipes/
 
 - Python 3.10+
 - CUDA 11.8+ with compatible GPU (24GB+ VRAM recommended)
-- [Unsloth](https://github.com/unslothai/unsloth) installed
+- [uv](https://docs.astral.sh/uv/) (auto-installed if not present)
 
-### 2. Setup Configuration
+### 2. Setup Environment
+
+```bash
+cd samples/unsloth/qwen3/
+
+# Run setup script (creates uv venv and installs packages)
+./setup.sh
+
+# Or with specific Python version
+./setup.sh -p 3.11
+```
+
+### 3. Setup Configuration
 
 Create `env_local` file in the recipe directory:
 
 ```bash
-cd samples/unsloth/qwen3/
 cp env_local.example env_local  # Or create manually
 ```
 
@@ -71,7 +82,7 @@ INFER_TOP_P="0.8"
 INFER_MAX_TOKENS="16384"
 ```
 
-### 3. Run Training
+### 4. Run Training
 
 ```bash
 # View current configuration
@@ -84,7 +95,7 @@ INFER_MAX_TOKENS="16384"
 ./train.sh -g 0 -b 4 -s 100 -r 1e-4
 ```
 
-### 4. Test the Model
+### 5. Test the Model
 
 ```bash
 # List available trained models
@@ -111,7 +122,7 @@ INFER_MAX_TOKENS="16384"
 | `-r, --lr RATE` | Learning rate |
 | `-s, --steps N` | Max training steps |
 | `--lora-r N` | LoRA rank |
-| `-e, --env NAME` | Conda environment to activate |
+| `--no-venv` | Skip virtual environment activation |
 | `-l, --logs` | List recent training logs |
 | `-c, --clean` | Clean old log directories |
 | `-v, --vars` | Show current configuration |
@@ -124,6 +135,7 @@ INFER_MAX_TOKENS="16384"
 | `-g, --gpu ID` | GPU device ID |
 | `-t, --tokens N` | Max new tokens |
 | `-T, --thinking` | Enable thinking mode |
+| `--no-venv` | Skip virtual environment activation |
 | `-l, --list` | List available models |
 | `-v, --vars` | Show inference configuration |
 

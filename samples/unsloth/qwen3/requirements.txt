@@ -1,0 +1,29 @@
+# ==============================================================================
+# Qwen3-14B Training Requirements
+# Install with: uv pip install -r requirements.txt
+# ==============================================================================
+
+# Core ML frameworks
+torch>=2.0.0
+transformers>=4.40.0
+datasets>=2.0.0
+accelerate>=0.20.0
+
+# Unsloth for optimized training
+unsloth
+
+# Training utilities
+trl>=0.7.0
+peft>=0.10.0
+bitsandbytes>=0.41.0
+
+# Experiment tracking
+wandb
+
+# Utilities
+pandas
+sentencepiece
+protobuf
+huggingface_hub>=0.20.0
+hf_transfer
+

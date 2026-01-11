@@ -32,14 +32,25 @@ train-recipes/
 
 - Python 3.10+
 - CUDA 11.8+ 및 호환 GPU (24GB+ VRAM 권장)
-- [Unsloth](https://github.com/unslothai/unsloth) 설치
+- [uv](https://docs.astral.sh/uv/) (없으면 자동 설치)
 
-### 2. 설정 구성
+### 2. 환경 설정
+
+```bash
+cd samples/unsloth/qwen3/
+
+# setup 스크립트 실행 (uv venv 생성 및 패키지 설치)
+./setup.sh
+
+# 또는 특정 Python 버전 지정
+./setup.sh -p 3.11
+```
+
+### 3. 설정 구성
 
 레시피 디렉토리에 `env_local` 파일 생성:
 
 ```bash
-cd samples/unsloth/qwen3/
 cp env_local.example env_local  # 또는 직접 생성
 ```
 
@@ -71,7 +82,7 @@ INFER_TOP_P="0.8"
 INFER_MAX_TOKENS="16384"
 ```
 
-### 3. 학습 실행
+### 4. 학습 실행
 
 ```bash
 # 현재 설정 확인
@@ -84,7 +95,7 @@ INFER_MAX_TOKENS="16384"
 ./train.sh -g 0 -b 4 -s 100 -r 1e-4
 ```
 
-### 4. 모델 테스트
+### 5. 모델 테스트
 
 ```bash
 # 사용 가능한 학습된 모델 목록
@@ -111,7 +122,7 @@ INFER_MAX_TOKENS="16384"
 | `-r, --lr RATE` | 학습률 |
 | `-s, --steps N` | 최대 학습 스텝 |
 | `--lora-r N` | LoRA 랭크 |
-| `-e, --env NAME` | 활성화할 Conda 환경 |
+| `--no-venv` | 가상환경 활성화 건너뛰기 |
 | `-l, --logs` | 최근 학습 로그 목록 |
 | `-c, --clean` | 오래된 로그 디렉토리 정리 |
 | `-v, --vars` | 현재 설정 표시 |
@@ -124,6 +135,7 @@ INFER_MAX_TOKENS="16384"
 | `-g, --gpu ID` | GPU 장치 ID |
 | `-t, --tokens N` | 최대 생성 토큰 수 |
 | `-T, --thinking` | thinking 모드 활성화 |
+| `--no-venv` | 가상환경 활성화 건너뛰기 |
 | `-l, --list` | 사용 가능한 모델 목록 |
 | `-v, --vars` | 추론 설정 표시 |
 

@@ -18,6 +18,8 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+VENV_DIR=".venv"
+
 # ==============================================================================
 # Load environment variables from env_local
 # ==============================================================================
@@ -50,7 +52,7 @@ THINKING_TEMPERATURE="${INFER_THINKING_TEMPERATURE:-0.6}"
 THINKING_TOP_P="${INFER_THINKING_TOP_P:-0.95}"
 THINKING_TOP_K="${INFER_THINKING_TOP_K:-20}"
 THINKING_MODE=""
-CONDA_ENV=""
+SKIP_VENV=""
 
 # ==============================================================================
 # Functions
@@ -72,7 +74,7 @@ print_help() {
     echo "  -g, --gpu ID        GPU device ID (default: $GPU_ID from env_local)"
     echo "  -t, --tokens N      Max new tokens (default: $MAX_TOKENS)"
     echo "  -T, --thinking      Start with thinking mode enabled"
-    echo "  -e, --env NAME      Conda environment name to activate"
+    echo "  --no-venv           Skip virtual environment activation"
     echo "  -l, --list          List available trained models"
     echo "  -v, --vars          Show inference configuration from env_local"
     echo "  -h, --help          Show this help message"
@@ -87,6 +89,9 @@ print_help() {
     echo "  $0 -m ./logs/qwen3-14b_.../lora_model"
     echo "  $0 -g 1 -T          # Use GPU 1 with thinking mode"
     echo "  $0 -t 2048          # Set max tokens to 2048"
+    echo ""
+    echo -e "${GREEN}Setup:${NC}"
+    echo "  Run ${YELLOW}./setup.sh${NC} first to create uv virtual environment"
     echo ""
     echo -e "${GREEN}In-console Commands:${NC}"
     echo "  /help      - Show available commands"
@@ -198,6 +203,25 @@ check_model() {
     return 1
 }
 
+activate_venv() {
+    if [ "$SKIP_VENV" = "1" ]; then
+        echo -e "${YELLOW}⚠️  Skipping virtual environment activation${NC}"
+        return 0
+    fi
+    
+    echo -e "${BLUE}🐍 Activating uv virtual environment...${NC}"
+    
+    if [ ! -d "$VENV_DIR" ]; then
+        echo -e "  ${RED}✗${NC} Virtual environment not found at $VENV_DIR"
+        echo -e "  Please run ${GREEN}./setup.sh${NC} first"
+        exit 1
+    fi
+    
+    source "$VENV_DIR/bin/activate"
+    echo -e "  ${GREEN}✓${NC} Activated: $VENV_DIR"
+    echo ""
+}
+
 run_chat() {
     echo -e "${BLUE}🚀 Starting chat console...${NC}"
     echo ""
@@ -252,9 +276,9 @@ while [[ $# -gt 0 ]]; do
             THINKING_MODE="1"
             shift
             ;;
-        -e|--env)
-            CONDA_ENV="$2"
-            shift 2
+        --no-venv)
+            SKIP_VENV="1"
+            shift
             ;;
         -l|--list)
             print_banner
@@ -282,13 +306,8 @@ done
 # Print banner
 print_banner
 
-# Activate conda environment if specified
-if [ -n "$CONDA_ENV" ]; then
-    echo -e "${BLUE}🐍 Activating conda environment: $CONDA_ENV${NC}"
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-    conda activate "$CONDA_ENV"
-    echo ""
-fi
+# Activate virtual environment
+activate_venv
 
 # Auto-detect model if not specified
 if [ -z "$MODEL_PATH" ]; then

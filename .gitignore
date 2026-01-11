@@ -34,7 +34,12 @@ build/
 # Virtual environments
 venv/
 .venv/
+**/venv/
+**/.venv/
 ENV/
+
+# Unsloth cache
+**/unsloth_compiled_cache/
 
 # ==============================================================================
 # IDE & System

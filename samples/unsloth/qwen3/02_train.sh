@@ -17,6 +17,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+VENV_DIR=".venv"
+
 # ==============================================================================
 # Load environment variables from env_local
 # ==============================================================================
@@ -40,11 +42,11 @@ load_env
 # Default values (from env_local or fallback)
 # ==============================================================================
 GPU_IDS="${TRAIN_GPU_IDS:-0,1}"
-CONDA_ENV=""
 BATCH_SIZE="${TRAIN_BATCH_SIZE:-2}"
 LEARNING_RATE="${TRAIN_LEARNING_RATE:-2e-4}"
 MAX_STEPS="${TRAIN_MAX_STEPS:-30}"
 LORA_RANK="${LORA_R:-32}"
+SKIP_VENV=""
 
 # ==============================================================================
 # Functions
@@ -67,7 +69,7 @@ print_help() {
     echo "  -r, --lr RATE       Learning rate (default: $LEARNING_RATE)"
     echo "  -s, --steps N       Max training steps (default: $MAX_STEPS)"
     echo "  --lora-r N          LoRA rank (default: $LORA_RANK)"
-    echo "  -e, --env NAME      Conda environment name to activate"
+    echo "  --no-venv           Skip virtual environment activation"
     echo "  -l, --logs          List recent training logs"
     echo "  -c, --clean         Clean old log directories (keep last 5)"
     echo "  -v, --vars          Show current configuration from env_local"
@@ -79,6 +81,9 @@ print_help() {
     echo "  $0 -g 2,3 -b 4      # Train on GPU 2,3 with batch size 4"
     echo "  $0 -s 100 -r 1e-4   # Train 100 steps with lr=1e-4"
     echo "  $0 -v               # Show current configuration"
+    echo ""
+    echo -e "${GREEN}Setup:${NC}"
+    echo "  Run ${YELLOW}./01_setup.sh${NC} first to create uv virtual environment"
     echo ""
 }
 
@@ -166,6 +171,25 @@ clean_logs() {
     echo ""
 }
 
+activate_venv() {
+    if [ "$SKIP_VENV" = "1" ]; then
+        echo -e "${YELLOW}⚠️  Skipping virtual environment activation${NC}"
+        return 0
+    fi
+    
+    echo -e "${BLUE}🐍 Activating uv virtual environment...${NC}"
+    
+    if [ ! -d "$VENV_DIR" ]; then
+        echo -e "  ${RED}✗${NC} Virtual environment not found at $VENV_DIR"
+        echo -e "  Please run ${GREEN}./01_setup.sh${NC} first"
+        exit 1
+    fi
+    
+    source "$VENV_DIR/bin/activate"
+    echo -e "  ${GREEN}✓${NC} Activated: $VENV_DIR"
+    echo ""
+}
+
 check_env() {
     echo -e "${BLUE}🔍 Checking environment...${NC}"
     
@@ -187,9 +211,26 @@ check_env() {
     fi
     
     # Check required packages
-    python -c "import unsloth" 2>/dev/null && echo -e "  ${GREEN}✓${NC} unsloth" || echo -e "  ${RED}✗${NC} unsloth not installed"
-    python -c "import torch" 2>/dev/null && echo -e "  ${GREEN}✓${NC} torch" || echo -e "  ${RED}✗${NC} torch not installed"
-    python -c "import wandb" 2>/dev/null && echo -e "  ${GREEN}✓${NC} wandb" || echo -e "  ${YELLOW}!${NC} wandb not installed (optional)"
+    python -c "import unsloth" 2>/dev/null && echo -e "  ${GREEN}✓${NC} unsloth" || { echo -e "  ${RED}✗${NC} unsloth not installed"; exit 1; }
+    python -c "import torch" 2>/dev/null && echo -e "  ${GREEN}✓${NC} torch" || { echo -e "  ${RED}✗${NC} torch not installed"; exit 1; }
+    
+    # Check and auto-install wandb if needed
+    if python -c "import wandb" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} wandb"
+    else
+        echo -e "  ${YELLOW}!${NC} wandb not installed, installing with uv..."
+        if command -v uv &> /dev/null; then
+            uv pip install wandb -q
+        else
+            pip install wandb -q
+        fi
+        if python -c "import wandb" 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} wandb installed successfully"
+        else
+            echo -e "  ${RED}✗${NC} wandb installation failed"
+            exit 1
+        fi
+    fi
     
     # Check env_local
     if [ -f "env_local" ]; then
@@ -268,9 +309,9 @@ while [[ $# -gt 0 ]]; do
             LORA_RANK="$2"
             shift 2
             ;;
-        -e|--env)
-            CONDA_ENV="$2"
-            shift 2
+        --no-venv)
+            SKIP_VENV="1"
+            shift
             ;;
         -l|--logs)
             print_banner
@@ -303,13 +344,8 @@ done
 # Print banner
 print_banner
 
-# Activate conda environment if specified
-if [ -n "$CONDA_ENV" ]; then
-    echo -e "${BLUE}🐍 Activating conda environment: $CONDA_ENV${NC}"
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-    conda activate "$CONDA_ENV"
-    echo ""
-fi
+# Activate virtual environment
+activate_venv
 
 # Check environment
 check_env
